@@ -1,0 +1,766 @@
+_G.ForgenetEnabled = false
+if not _G.ForgenetEnabled then
+    if _G.ForgenetLoaded then
+        warn("WARNING: Forgenet Lua is already loaded! Preventing duplicate execution.")
+        return
+    else
+        _G.ForgenetLoaded = true
+        print("FORGENET: Forgenet Lua v2.0 - Initializing...")
+    end
+end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local Utils = {}
+
+function Utils.SafeCall(func, ...)
+    local success, result = pcall(func, ...)
+    if not success then
+        warn("WARNING: SafeCall Error:", result)
+    end
+    return success, result
+end
+
+function Utils.GetDistance(part1, part2)
+    if not part1 or not part2 then return math.huge end
+    return (part1.Position - part2.Position).Magnitude
+end
+
+function Utils.Notification(title, text, duration)
+    Utils.SafeCall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = duration or 5
+        })
+    end)
+end
+
+function Utils.CreateHighlight(parent, color, name)
+    if parent:FindFirstChild(name or "ForgenetHighlight") then return end
+    
+    local highlight = Instance.new("Highlight")
+    highlight.Name = name or "ForgenetHighlight"
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.FillColor = color or Color3.fromRGB(255, 255, 255)
+    highlight.OutlineTransparency = 0.75
+    highlight.FillTransparency = 0.75
+    highlight.Parent = parent
+    
+    return highlight
+end
+
+function Utils.RemoveHighlights(parent, name)
+    local highlight = parent:FindFirstChild(name or "ForgenetHighlight")
+    if highlight then
+        highlight:Destroy()
+    end
+end
+
+local AssetManager = {}
+
+function AssetManager.DownloadAssets()
+    Utils.Notification("Forgenet", "Assets system initialized", 3)
+end
+
+task.spawn(AssetManager.DownloadAssets)
+
+local ESPManager = {}
+ESPManager.ActiveESP = {}
+
+function ESPManager.CreateESP(target, espType, color)
+    if not target or ESPManager.ActiveESP[target] then return end
+    
+    local espData = {
+        target = target,
+        type = espType,
+        highlight = Utils.CreateHighlight(target, color, "ForgenetESP"),
+        textLabel = nil
+    }
+    
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        local billboardGui = Instance.new("BillboardGui")
+        billboardGui.Name = "ForgenetESPLabel"
+        billboardGui.Adornee = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart or target:GetChildren()[1]
+        billboardGui.Size = UDim2.new(0, 100, 0, 50)
+        billboardGui.StudsOffset = Vector3.new(0, 4, 0)
+        billboardGui.Parent = target
+        
+        local textLabel = Instance.new("TextLabel")
+        textLabel.Size = UDim2.new(1, 0, 1, 0)
+        textLabel.BackgroundTransparency = 1
+        textLabel.TextColor3 = color
+        textLabel.TextStrokeTransparency = 1
+        textLabel.TextScaled = true
+        textLabel.Font = Enum.Font.SourceSansBold
+        textLabel.Text = espType
+        textLabel.Parent = billboardGui
+        
+        espData.textLabel = billboardGui
+    end
+    
+    ESPManager.ActiveESP[target] = espData
+end
+
+function ESPManager.RemoveESP(target)
+    local espData = ESPManager.ActiveESP[target]
+    if not espData then return end
+    
+    Utils.RemoveHighlights(target, "ForgenetESP")
+    if espData.textLabel then
+        espData.textLabel:Destroy()
+    end
+    
+    ESPManager.ActiveESP[target] = nil
+end
+
+function ESPManager.UpdateESP()
+    for target, espData in pairs(ESPManager.ActiveESP) do
+        if not target or not target.Parent then
+            ESPManager.RemoveESP(target)
+            continue
+        end
+        
+        if espData.textLabel and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local distance = Utils.GetDistance(
+                LocalPlayer.Character.HumanoidRootPart,
+                target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
+            )
+            
+            if distance < math.huge then
+                espData.textLabel.TextLabel.Text = string.format("%s\n%.1f studs", espData.type, distance)
+            end
+        end
+    end
+end
+
+RunService.Heartbeat:Connect(ESPManager.UpdateESP)
+
+local MovementManager = {}
+MovementManager.Connections = {}
+
+function MovementManager.SetSpeed(enabled, speed)
+    if MovementManager.Connections.speed then
+        MovementManager.Connections.speed:Disconnect()
+    end
+    
+    if not enabled then return end
+    
+    MovementManager.Connections.speed = RunService.Heartbeat:Connect(function()
+        Utils.SafeCall(function()
+            if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("Humanoid") then return end
+            
+            local humanoid = LocalPlayer.Character.Humanoid
+            local rootPart = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            
+            if humanoid.MoveDirection ~= Vector3.zero and rootPart then
+                local deltaTime = RunService.Heartbeat:Wait()
+                local moveVector = humanoid.MoveDirection * (speed / 10) * deltaTime * 10
+                rootPart.CFrame = rootPart.CFrame + moveVector
+            end
+        end)
+    end)
+end
+
+function MovementManager.SetNoclip(enabled)
+    if MovementManager.Connections.noclip then
+        MovementManager.Connections.noclip:Disconnect()
+    end
+    
+    if not enabled then
+        Utils.SafeCall(function()
+            if LocalPlayer.Character then
+                for _, part in pairs(LocalPlayer.Character:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = true
+                    end
+                end
+            end
+        end)
+        return
+    end
+    
+    Utils.Notification("Forgenet", "WARNING: Noclip Warning: Stay inside walls for less than 1 second!", 5)
+    
+    MovementManager.Connections.noclip = RunService.Heartbeat:Connect(function()
+        Utils.SafeCall(function()
+            if LocalPlayer.Character then
+                for _, part in pairs(LocalPlayer.Character:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+    end)
+end
+
+function MovementManager.SetInfiniteJump(enabled)
+    if MovementManager.Connections.jump then
+        MovementManager.Connections.jump:Disconnect()
+    end
+    
+    if not enabled then return end
+    
+    MovementManager.Connections.jump = UserInputService.JumpRequest:Connect(function()
+        Utils.SafeCall(function()
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                LocalPlayer.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            end
+        end)
+    end)
+end
+
+local GameFeatures = {}
+
+function GameFeatures.SetupInfiniteStamina()
+    Utils.SafeCall(function()
+        local sprintingModule = ReplicatedStorage:FindFirstChild("Systems")
+        if sprintingModule then
+            sprintingModule = sprintingModule:FindFirstChild("Character")
+            if sprintingModule then
+                sprintingModule = sprintingModule:FindFirstChild("Game")
+                if sprintingModule then
+                    sprintingModule = sprintingModule:FindFirstChild("Sprinting")
+                    if sprintingModule then
+                        local config = require(sprintingModule).DefaultConfig
+                        config.MaxStamina = 9999
+                        config.StaminaLoss = 0
+                        Utils.Notification("Forgenet", "Infinite Stamina activated! (Takes effect next round)", 5)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+function GameFeatures.InstantGenerator(enabled, waitTime)
+    if not enabled then return end
+    
+    waitTime = waitTime or 2.5
+    
+    task.spawn(function()
+        local processedGenerators = {}
+        
+        while _G.instantGenerator and task.wait(0.5) do
+            Utils.SafeCall(function()
+                if not workspace.Map:FindFirstChild("Ingame") then return end
+                if not workspace.Map.Ingame:FindFirstChild("Map") then return end
+                
+                for _, generator in pairs(workspace.Map.Ingame.Map:GetChildren()) do
+                    if generator.Name == "Generator" and not processedGenerators[generator] then
+                        processedGenerators[generator] = true
+                        
+                        local scripts = generator:FindFirstChild("Scripts")
+                        if scripts and scripts:FindFirstChild("Client") then
+                            local success = Utils.SafeCall(function()
+                                local env = getsenv(scripts.Client)
+                                if env and env.toggleGeneratorState then
+                                    local originalFunc = env.toggleGeneratorState
+                                    
+                                    env.toggleGeneratorState = function(action)
+                                        if not _G.instantGenerator then 
+                                            return originalFunc(action) 
+                                        end
+                                        
+                                        if action ~= "enter" then 
+                                            return originalFunc("leave") 
+                                        end
+                                        
+                                        local remotes = generator:FindFirstChild("Remotes")
+                                        if remotes and remotes:FindFirstChild("RF") then
+                                            local result = remotes.RF:InvokeServer("enter")
+                                            if result == "fixing" then
+                                                for i = 1, 5 do
+                                                    if generator.Progress.Value >= 100 then break end
+                                                    if remotes:FindFirstChild("RE") then
+                                                        remotes.RE:FireServer()
+                                                    end
+                                                    task.wait(_G.generatorWaitTime or waitTime)
+                                                end
+                                            end
+                                        end
+                                        return ""
+                                    end
+                                end
+                            end)
+                            
+                            if success then
+                                Utils.Notification("Forgenet", "Generator " .. tostring(#processedGenerators) .. " enhanced with " .. tostring(_G.generatorWaitTime or waitTime) .. "s delay!", 2)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+end
+
+local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/fuckg1thub/Fluent-Inspired-UI/refs/heads/main/fiui.luau"))()
+local window = library.Window("Forgenet Lua Hub v2.0", "Enhanced Edition", "rbxassetid://100978852993242", false, Color3.fromRGB(120, 50, 200))
+
+local mainTab = window:Tab("Main Features", "rbxassetid://101966922795157")
+
+local generatorsSection = mainTab:AddSection("Generator Tools")
+
+generatorsSection.Toggle("Enhanced Generator ESP", function(enabled)
+    _G.generatorESP = enabled
+    
+    task.spawn(function()
+        while _G.generatorESP and task.wait(0.5) do
+            Utils.SafeCall(function()
+                if not workspace.Map:FindFirstChild("Ingame") then return end
+                if not workspace.Map.Ingame:FindFirstChild("Map") then return end
+                
+                for _, generator in pairs(workspace.Map.Ingame.Map:GetChildren()) do
+                    if generator.Name == "Generator" then
+                        if not ESPManager.ActiveESP[generator] then
+                            local color = generator.Progress.Value >= 100 and 
+                                Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 255, 51)
+                            ESPManager.CreateESP(generator, "Generator", color)
+                        else
+                            local espData = ESPManager.ActiveESP[generator]
+                            if espData and espData.highlight then
+                                espData.highlight.FillColor = generator.Progress.Value >= 100 and 
+                                    Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 255, 51)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+        
+        for target, _ in pairs(ESPManager.ActiveESP) do
+            if target.Name == "Generator" then
+                ESPManager.RemoveESP(target)
+            end
+        end
+    end)
+end)
+
+local generatorWaitTime = 2.5
+generatorsSection.Slider("Auto Generator Delay", 2.5, 2.5, 20, function(value)
+    generatorWaitTime = value
+    _G.generatorWaitTime = value
+    Utils.Notification("Forgenet", "Generator delay set to " .. tostring(value) .. " seconds", 3)
+end)
+
+generatorsSection.Toggle("Auto Generator Fix", function(enabled)
+    _G.instantGenerator = enabled
+    if enabled then
+        GameFeatures.InstantGenerator(true, generatorWaitTime)
+    end
+end)
+
+local playersSection = mainTab:AddSection("Player ESP")
+
+playersSection.Toggle("Killer ESP", function(enabled)
+    _G.killerESP = enabled
+    
+    task.spawn(function()
+        while _G.killerESP and task.wait(0.5) do
+            Utils.SafeCall(function()
+                if workspace.Players:FindFirstChild("Killers") then
+                    for _, killer in pairs(workspace.Players.Killers:GetChildren()) do
+                        if not ESPManager.ActiveESP[killer] then
+                            ESPManager.CreateESP(killer, "Killer", Color3.fromRGB(255, 0, 0))
+                        end
+                    end
+                end
+            end)
+        end
+        
+        Utils.SafeCall(function()
+            if workspace.Players:FindFirstChild("Killers") then
+                for _, killer in pairs(workspace.Players.Killers:GetChildren()) do
+                    ESPManager.RemoveESP(killer)
+                end
+            end
+        end)
+    end)
+end)
+
+playersSection.Toggle("Survivor ESP", function(enabled)
+    _G.survivorESP = enabled
+    
+    task.spawn(function()
+        while _G.survivorESP and task.wait(0.5) do
+            Utils.SafeCall(function()
+                if workspace.Players:FindFirstChild("Survivors") then
+                    for _, survivor in pairs(workspace.Players.Survivors:GetChildren()) do
+                        if not ESPManager.ActiveESP[survivor] then
+                            ESPManager.CreateESP(survivor, "Survivor", Color3.fromRGB(0, 150, 255))
+                        end
+                    end
+                end
+            end)
+        end
+        
+        Utils.SafeCall(function()
+            if workspace.Players:FindFirstChild("Survivors") then
+                for _, survivor in pairs(workspace.Players.Survivors:GetChildren()) do
+                    ESPManager.RemoveESP(survivor)
+                end
+            end
+        end)
+    end)
+end)
+
+local itemsSection = mainTab:AddSection("Item ESP")
+
+itemsSection.Toggle("Items ESP", function(enabled)
+    _G.itemESP = enabled
+    
+    task.spawn(function()
+        while _G.itemESP and task.wait(0.5) do
+            Utils.SafeCall(function()
+                if not workspace.Map:FindFirstChild("Ingame") then return end
+                if not workspace.Map.Ingame:FindFirstChild("Map") then return end
+                
+                for _, item in pairs(workspace.Map.Ingame.Map:GetChildren()) do
+                    if item:IsA("Tool") and not ESPManager.ActiveESP[item] then
+                        ESPManager.CreateESP(item, "Item", Color3.fromRGB(0, 255, 255))
+                    end
+                end
+            end)
+        end
+        
+        for target, _ in pairs(ESPManager.ActiveESP) do
+            if target:IsA("Tool") then
+                ESPManager.RemoveESP(target)
+            end
+        end
+    end)
+end)
+
+local playerTab = window:Tab("Player Enhancement", "rbxassetid://73140121358767")
+
+local staminaSection = playerTab:AddSection("Stamina Control")
+staminaSection.Button("Enable Infinite Stamina", function()
+    GameFeatures.SetupInfiniteStamina()
+end)
+
+local movementSection = playerTab:AddSection("Movement Enhancement")
+
+local currentSpeed = 16
+movementSection.Slider("Movement Speed", 16, 16, 150, function(value)
+    currentSpeed = value
+end)
+
+movementSection.Toggle("Enhanced Speed", function(enabled)
+    MovementManager.SetSpeed(enabled, currentSpeed)
+end)
+
+movementSection.Toggle("Noclip Mode [WARNING]", function(enabled)
+    MovementManager.SetNoclip(enabled)
+end)
+
+movementSection.Toggle("Infinite Jump", function(enabled)
+    MovementManager.SetInfiniteJump(enabled)
+end)
+
+local abilitiesSection = playerTab:AddSection("Special Abilities")
+
+abilitiesSection.Toggle("Enable Jump Override [WARNING]", function(enabled)
+    if enabled then
+        Utils.Notification("Forgenet", "WARNING: Jump Warning: Excessive jumping may trigger anti-cheat!", 5)
+    end
+    
+    task.spawn(function()
+        while enabled and task.wait() do
+            Utils.SafeCall(function()
+                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                    LocalPlayer.Character.Humanoid.JumpPower = enabled and 50 or 16
+                end
+            end)
+        end
+        
+        Utils.SafeCall(function()
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                LocalPlayer.Character.Humanoid.JumpPower = 16
+            end
+        end)
+    end)
+end)
+
+local killerTab = window:Tab("Killer Tools", "rbxassetid://83038806046146")
+local killerSection = killerTab:AddSection("Killer Functions")
+
+killerSection.Toggle("Spectate Killer", function(enabled)
+    Utils.SafeCall(function()
+        if enabled then
+            if workspace.Players:FindFirstChild("Killers") then
+                local killer = workspace.Players.Killers:GetChildren()[1]
+                if killer then
+                    Camera.CameraSubject = killer
+                    Utils.Notification("Forgenet", "Now spectating killer", 3)
+                end
+            end
+        else
+            if LocalPlayer.Character then
+                Camera.CameraSubject = LocalPlayer.Character
+                Utils.Notification("Forgenet", "Camera reset to player", 3)
+            end
+        end
+    end)
+end)
+
+killerSection.Button("Teleport to Killer", function()
+    Utils.SafeCall(function()
+        if workspace.Players:FindFirstChild("Killers") then
+            local killer = workspace.Players.Killers:GetChildren()[1]
+            if killer and killer.PrimaryPart and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                LocalPlayer.Character.HumanoidRootPart.CFrame = killer.PrimaryPart.CFrame * CFrame.new(0, 0, 5)
+                Utils.Notification("Forgenet", "Teleported to killer", 3)
+            end
+        end
+    end)
+end)
+
+killerSection.Button("Mass Eliminate [KILLER ONLY]", function()
+    Utils.Notification("Forgenet", "Starting mass elimination sequence...", 3)
+    
+    task.spawn(function()
+        Utils.SafeCall(function()
+            if not workspace.Players:FindFirstChild("Survivors") then return end
+            
+            for _, survivor in pairs(workspace.Players.Survivors:GetChildren()) do
+                local username = survivor:GetAttribute("Username")
+                if not username then continue end
+                
+                local targetPlayer = Players:FindFirstChild(username)
+                if not targetPlayer then continue end
+                
+                local startTime = tick()
+                while tick() - startTime <= 15 do
+                    if not Players:FindFirstChild(username) then break end
+                    if not targetPlayer.Character then break end
+                    if not targetPlayer.Character:FindFirstChild("Humanoid") then break end
+                    if targetPlayer.Character.Humanoid.Health <= 0 then break end
+                    
+                    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                        LocalPlayer.Character.HumanoidRootPart.CFrame = targetPlayer.Character.HumanoidRootPart.CFrame
+                        
+                        local networkModule = ReplicatedStorage:FindFirstChild("Modules")
+                        if networkModule then
+                            networkModule = networkModule:FindFirstChild("Network")
+                            if networkModule and networkModule:FindFirstChild("RemoteEvent") then
+                                networkModule.RemoteEvent:FireServer("UseActorAbility", "Slash")
+                            end
+                        end
+                    end
+                    
+                    task.wait(0.1)
+                end
+            end
+            
+            Utils.Notification("Forgenet", "Mass elimination sequence completed", 5)
+        end)
+    end)
+end)
+
+local teleportTab = window:Tab("Teleportation", "rbxassetid://100658585674886")
+local teleportSection = teleportTab:AddSection("Quick Teleports")
+
+for i = 1, 5 do
+    teleportSection.Button("Teleport to Generator " .. i, function()
+        Utils.SafeCall(function()
+            if not workspace.Map:FindFirstChild("Ingame") then return end
+            if not workspace.Map.Ingame:FindFirstChild("Map") then return end
+            
+            local generators = {}
+            for _, gen in pairs(workspace.Map.Ingame.Map:GetChildren()) do
+                if gen.Name == "Generator" then
+                    table.insert(generators, gen)
+                end
+            end
+            
+            if generators[i] and generators[i].PrimaryPart and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                LocalPlayer.Character.HumanoidRootPart.CFrame = generators[i].PrimaryPart.CFrame + Vector3.new(0, 10, 0)
+                Utils.Notification("Forgenet", "Teleported to Generator " .. i, 3)
+            end
+        end)
+    end)
+end
+
+local miscTab = window:Tab("Miscellaneous", "rbxassetid://85291691462928")
+local miscSection = miscTab:AddSection("Game Modifications")
+
+miscSection.Button("Remove Fog & Atmosphere", function()
+    Utils.SafeCall(function()
+        for _, obj in pairs(Lighting:GetDescendants()) do
+            if obj:IsA("Atmosphere") then
+                obj:Destroy()
+            end
+        end
+        Lighting.FogEnd = 999999
+        Lighting.FogStart = 0
+        Utils.Notification("Forgenet", "Fog and atmosphere removed", 3)
+    end)
+end)
+
+miscSection.Button("Fullbright", function()
+    Utils.SafeCall(function()
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.FogEnd = 100000
+        Lighting.GlobalShadows = false
+        Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+        Utils.Notification("Forgenet", "Fullbright enabled", 3)
+    end)
+end)
+
+local chatSpyEnabled = false
+local chatSpyGui = nil
+
+miscSection.Toggle("Chat Visibility", function(enabled)
+    chatSpyEnabled = enabled
+    
+    if enabled then
+        Utils.SafeCall(function()
+            chatSpyGui = Instance.new("ScreenGui")
+            chatSpyGui.Name = "ForgenetChatSpy"
+            chatSpyGui.Parent = LocalPlayer.PlayerGui
+            
+            local frame = Instance.new("Frame")
+            frame.Size = UDim2.new(0, 400, 0, 300)
+            frame.Position = UDim2.new(1, -420, 0, 20)
+            frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+            frame.BorderSizePixel = 0
+            frame.Active = true
+            frame.Draggable = true
+            frame.Parent = chatSpyGui
+            
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 8)
+            corner.Parent = frame
+            
+            local title = Instance.new("TextLabel")
+            title.Size = UDim2.new(1, 0, 0, 30)
+            title.Position = UDim2.new(0, 0, 0, 0)
+            title.BackgroundColor3 = Color3.fromRGB(120, 50, 200)
+            title.Text = "Forgenet Chat Spy"
+            title.TextColor3 = Color3.fromRGB(255, 255, 255)
+            title.TextScaled = true
+            title.Font = Enum.Font.SourceSansBold
+            title.Parent = frame
+            
+            local titleCorner = Instance.new("UICorner")
+            titleCorner.CornerRadius = UDim.new(0, 8)
+            titleCorner.Parent = title
+            
+            local scrollFrame = Instance.new("ScrollingFrame")
+            scrollFrame.Size = UDim2.new(1, -10, 1, -40)
+            scrollFrame.Position = UDim2.new(0, 5, 0, 35)
+            scrollFrame.BackgroundTransparency = 1
+            scrollFrame.ScrollBarThickness = 6
+            scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(120, 50, 200)
+            scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+            scrollFrame.Parent = frame
+            
+            local layout = Instance.new("UIListLayout")
+            layout.SortOrder = Enum.SortOrder.LayoutOrder
+            layout.Padding = UDim.new(0, 2)
+            layout.Parent = scrollFrame
+            
+            local function addChatMessage(player, message, messageType)
+                local messageFrame = Instance.new("Frame")
+                messageFrame.Size = UDim2.new(1, -10, 0, 20)
+                messageFrame.BackgroundTransparency = 1
+                messageFrame.LayoutOrder = #scrollFrame:GetChildren()
+                messageFrame.Parent = scrollFrame
+                
+                local messageLabel = Instance.new("TextLabel")
+                messageLabel.Size = UDim2.new(1, 0, 1, 0)
+                messageLabel.BackgroundTransparency = 1
+                messageLabel.Text = string.format("[%s] %s: %s", 
+                    messageType or "ALL", 
+                    player and player.Name or "Unknown", 
+                    message or ""
+                )
+                messageLabel.TextColor3 = messageType == "PRIVATE" and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(255, 255, 255)
+                messageLabel.TextXAlignment = Enum.TextXAlignment.Left
+                messageLabel.TextScaled = true
+                messageLabel.Font = Enum.Font.SourceSans
+                messageLabel.Parent = messageFrame
+                
+                scrollFrame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
+                scrollFrame.CanvasPosition = Vector2.new(0, scrollFrame.CanvasSize.Y.Offset)
+            end
+            
+            local function hookChatted()
+                for _, player in pairs(Players:GetPlayers()) do
+                    if player ~= LocalPlayer then
+                        player.Chatted:Connect(function(message)
+                            if chatSpyEnabled then
+                                addChatMessage(player, message, "ALL")
+                            end
+                        end)
+                    end
+                end
+                
+                Players.PlayerAdded:Connect(function(player)
+                    player.Chatted:Connect(function(message)
+                        if chatSpyEnabled then
+                            addChatMessage(player, message, "ALL")
+                        end
+                    end)
+                end)
+            end
+            
+            local function detectHiddenChat()
+                local chatService = game:GetService("Chat")
+                local textChatService = game:GetService("TextChatService")
+                
+                Utils.SafeCall(function()
+                    if textChatService and textChatService.MessageReceived then
+                        textChatService.MessageReceived:Connect(function(message)
+                            if chatSpyEnabled and message.TextSource then
+                                local player = Players:GetPlayerByUserId(message.TextSource.UserId)
+                                addChatMessage(player, message.Text, "ALL")
+                            end
+                        end)
+                    end
+                end)
+                
+                Utils.SafeCall(function()
+                    local starterGui = game:GetService("StarterGui")
+                    starterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, true)
+                    
+                    task.spawn(function()
+                        while chatSpyEnabled do
+                            Utils.SafeCall(function()
+                                local chatGui = LocalPlayer.PlayerGui:FindFirstChild("Chat")
+                                if chatGui then
+                                    local chatFrame = chatGui:FindFirstChild("Frame")
+                                    if chatFrame then
+                                        local chatChannelParentFrame = chatFrame:FindFirstChild("ChatChannelParentFrame")
+                                        if chatChannelParentFrame then
+                                            for _, channel in pairs(chatChannelParentFrame:GetChildren()) do
+                                                if channel:IsA("Frame") then
+                                                    local scrollingFrame = channel:FindFirstChild("ScrollingFrame")
+                                                    if scrollingFrame then
+                                                        for _, messageFrame in pairs(scrollingFrame:GetChildren()) do
+                                                            if messageFrame:IsA("Frame") and messageFrame:GetAttribute("ForgenetProcessed") ~= true then
+                                                                messageFrame:SetAttribute("ForgenetProcessed", true)
+                                                                
+                                                                local textLabel = messageFrame:FindFirstChildWhichIsA("TextLabel")
+                                                                if textLabel then
+                                                                    local fullText = textLabel.Text
+                                                                    if fullText and fullText ~= "" then
+                                                                        addChatMessage(nil, fullText, "DETECTED")
+                                                                    end
+                                                                end
+                                                            end
+                                                        end
+                                                    end
+                                                end
